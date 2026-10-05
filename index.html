@@ -7,7 +7,20 @@
     <!-- خط Cairo -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <script>
+        // إن حدث خطأ برمجي يظهر شريط أحمر بنصه بدل أن تتوقف الصفحة بصمت
+        window.addEventListener('error', function (e) {
+            if (!e || !e.message) return;
+            var show = function () {
+                var b = document.createElement('div');
+                b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:8px 12px;font:13px/1.5 monospace;direction:ltr;text-align:left;word-break:break-all';
+                b.textContent = 'JS error: ' + e.message + (e.lineno ? ' (line ' + e.lineno + ')' : '');
+                (document.body || document.documentElement).appendChild(b);
+            };
+            if (document.body) show(); else document.addEventListener('DOMContentLoaded', show);
+        });
+    </script>
     <!-- تنسيق Tailwind مُدمج داخل الملف (لا حاجة لأي ملف css خارجي) -->
     <style>
 /* احتياط للمتصفحات القديمة التي لا تعرف الخاصية inset */
@@ -614,10 +627,7 @@
         <p>جميع الحقوق محفوظة © 2026 - فندق المدينة (بورتسودان)</p>
     </footer>
 
-    <!-- Firebase SDK (Firestore) -->
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-
+    <!-- مكتبة Firebase تُحمَّل في الخلفية من داخل الكود (لا تعطّل الصفحة إن تأخر الإنترنت) -->
     <!-- المنطق + طبقة البيانات (Firebase) -->
     <script>
         // ================== طبقة البيانات: Firebase Firestore ==================
@@ -633,18 +643,61 @@
             measurementId: "G-62EHFTM4ML"
         };
 
-        let fdb = null;
-        try {
-            if (typeof firebase !== 'undefined') {
-                firebase.initializeApp(firebaseConfig);
-                fdb = firebase.firestore();
-                // long-polling تلقائي: يضمن عمل الاتصال على شبكات الجوال والشبكات التي تحجب WebSocket
-                fdb.settings({ ignoreUndefinedProperties: true, experimentalAutoDetectLongPolling: true });
-            }
-        } catch (e) { console.error('Firebase init', e); fdb = null; }
-
         const NO_DB_MSG = 'تعذر الاتصال بقاعدة بيانات Firebase، تحقق من اتصالك بالإنترنت';
         function _newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+        // شريط تنبيه صغير أسفل الصفحة (لا يمنع استخدام الموقع)
+        let _bar = null;
+        function _showBar(msg, color, ms) {
+            try {
+                if (!_bar) {
+                    _bar = document.createElement('div');
+                    _bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;color:#fff;padding:10px 14px;font-size:14px;text-align:center';
+                    document.body.appendChild(_bar);
+                }
+                _bar.style.background = color; _bar.textContent = msg; _bar.style.display = 'block';
+                if (ms) { const me = _bar; setTimeout(() => { if (_bar === me && me.textContent === msg) me.style.display = 'none'; }, ms); }
+            } catch (e) {}
+        }
+        function _hideBar() { if (_bar) _bar.style.display = 'none'; }
+
+        // تحميل مكتبة Firebase في الخلفية: الموقع (الغرف والأزرار) يعمل فورًا دون انتظارها،
+        // وتبدأ البيانات بالظهور بمجرد وصول المكتبة. تُجرَّب أكثر من شبكة توصيل وتُعاد المحاولة تلقائيًا.
+        const FB_VER = '10.12.2';
+        const FB_SOURCES = [
+            'https://www.gstatic.com/firebasejs/' + FB_VER + '/',
+            'https://cdn.jsdelivr.net/npm/firebase@' + FB_VER + '/'
+        ];
+        let fdb = null;
+        function _loadScript(src) {
+            return new Promise((res, rej) => {
+                const el = document.createElement('script');
+                el.src = src; el.async = true;
+                el.onload = res; el.onerror = () => { el.remove(); rej(new Error('load ' + src)); };
+                document.head.appendChild(el);
+            });
+        }
+        async function _loadFirebase() {
+            for (let round = 0; round < 4; round++) {
+                for (const base of FB_SOURCES) {
+                    try {
+                        if (typeof firebase === 'undefined') await _loadScript(base + 'firebase-app-compat.js');
+                        if (!firebase.firestore) await _loadScript(base + 'firebase-firestore-compat.js');
+                        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                        const f = firebase.firestore();
+                        // long-polling تلقائي: يضمن عمل الاتصال على شبكات الجوال والشبكات التي تحجب WebSocket
+                        try { f.settings({ ignoreUndefinedProperties: true, experimentalAutoDetectLongPolling: true }); } catch (e) { /* أُعدّت مسبقًا */ }
+                        return f;
+                    } catch (e) { console.warn('Firebase load failed, retrying', e); }
+                }
+                await new Promise(r => setTimeout(r, 3000));
+            }
+            return null;
+        }
+        const fbReady = _loadFirebase().then((f) => { fdb = f; if (f) _hideBar(); return f; });
+        // إن تأخر الاتصال أكثر من 10 ثوانٍ نُنبّه الزائر (والموقع يبقى قابلاً للاستخدام)
+        setTimeout(() => { if (!fdb) _showBar('جاري الاتصال بقاعدة البيانات... تحقق من اتصالك بالإنترنت', '#b45309'); }, 10000);
+        fbReady.then((f) => { if (!f) _showBar(NO_DB_MSG, '#b91c1c'); });
 
         // يظهر شريط تنبيه واحد إن كانت قواعد Firestore تمنع القراءة/الكتابة (أو لم تُنشأ القاعدة بعد)
         let _bannerShown = false;
@@ -652,19 +705,17 @@
             console.error('Firebase:', e);
             if (_bannerShown || !e || (e.code !== 'permission-denied' && e.code !== 'not-found')) return;
             _bannerShown = true;
-            const b = document.createElement('div');
-            b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#b91c1c;color:#fff;padding:10px 14px;font-size:14px;text-align:center';
-            b.textContent = 'تعذر الوصول إلى قاعدة بيانات Firebase: أنشئ قاعدة Firestore وفعّل قواعد القراءة والكتابة من لوحة Firebase.';
-            document.body.appendChild(b);
-            setTimeout(() => b.remove(), 15000);
-        }
-        // يتأكد أن Firebase جاهز وأن الجهاز متصل قبل أي كتابة (حتى لا تُحفظ عملية معلّقة ثم تتكرر)
-        function _ready() {
-            if (!fdb || navigator.onLine === false) throw new Error(NO_DB_MSG);
-            return fdb;
+            _showBar('تعذر الوصول إلى قاعدة بيانات Firebase: أنشئ قاعدة Firestore وفعّل قواعد القراءة والكتابة من لوحة Firebase.', '#b91c1c', 15000);
         }
         function _limit(p, ms) {
             return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(NO_DB_MSG)), ms || 20000))]);
+        }
+        // يتأكد أن Firebase جاهز وأن الجهاز متصل قبل أي كتابة (حتى لا تُحفظ عملية معلّقة ثم تتكرر)
+        async function _ready() {
+            if (navigator.onLine === false) throw new Error(NO_DB_MSG);
+            const f = await _limit(fbReady, 15000);
+            if (!f) throw new Error(NO_DB_MSG);
+            return f;
         }
 
         // ===== سجل الحجوزات الدائم (records) =====
@@ -726,7 +777,7 @@
         async function addDoc(c, data) {
             _guardRecords(c);
             try {
-                const f = _ready();
+                const f = await _ready();
                 const body = { ..._clean(data), _ts: _stamp() };
                 const ref = f.collection(c.name).doc();
                 if (c.name === 'booking') {
@@ -744,7 +795,7 @@
         async function updateDoc(d, patch) {
             _guardRecords(d);
             try {
-                const f = _ready();
+                const f = await _ready();
                 const ref = f.collection(d.name).doc(d.id);
                 const clean = _clean(patch);
                 if (d.name !== 'booking') { await _limit(ref.update(clean)); return; }
@@ -763,13 +814,20 @@
         }
         async function deleteDoc(d) {
             _guardRecords(d);
-            try { await _limit(_ready().collection(d.name).doc(d.id).delete()); }
+            try { const f = await _ready(); await _limit(f.collection(d.name).doc(d.id).delete()); }
             catch (e) { _dbProblem(e); throw e; }
         }
         function onSnapshot(c, ok, fail) {
-            const report = (e) => { _dbProblem(e); if (fail) fail(e); else console.error(c.name, e); };
-            if (!fdb) { setTimeout(() => report(new Error(NO_DB_MSG)), 0); return () => {}; }
-            return fdb.collection(c.name).onSnapshot((qs) => ok(_snap(qs)), report);
+            let unsub = null, cancelled = false;
+            const report = (e) => { _dbProblem(e); if (fail) { try { fail(e); } catch (x) { console.error(x); } } else console.error(c.name, e); };
+            fbReady.then((f) => {
+                if (cancelled) return;
+                if (!f) { report(new Error(NO_DB_MSG)); return; }
+                unsub = f.collection(c.name).onSnapshot((qs) => {
+                    try { ok(_snap(qs)); } catch (x) { console.error(c.name, x); }
+                }, report);
+            });
+            return () => { cancelled = true; if (unsub) unsub(); };
         }
         // ====================================================
 
@@ -1193,4 +1251,623 @@
         });
 
         // ===== المنيو =====
-        const HOTEL_WHATSAPP = '249XXXXXXXXX'; // ← ضع رقم واتساب الفندق هنا بالصيغة ال
+        const HOTEL_WHATSAPP = '249XXXXXXXXX'; // ← ضع رقم واتساب الفندق هنا بالصيغة الدولية بدون +
+
+        window.openMenu = function() { document.getElementById('menu-modal').classList.remove('hidden'); }
+        window.closeMenu = function() { document.getElementById('menu-modal').classList.add('hidden'); }
+        window.menuAdmin = function() { closeMenu(); openAdminLogin(); }
+
+        window.toggleAbout = function() {
+            document.getElementById('about-panel').classList.toggle('hidden');
+            document.getElementById('about-arrow').classList.toggle('rotate-180');
+        }
+
+        window.openHelpWhatsApp = function() {
+            const msg = 'السلام عليكم، أحتاج مساعدة بخصوص فندق المدينة - بورتسودان.';
+            window.open(`https://api.whatsapp.com/send?phone=${HOTEL_WHATSAPP}&text=${encodeURIComponent(msg)}`, '_blank');
+        }
+
+        function applyTheme(dark) {
+            document.body.classList.toggle('dark', dark);
+            document.getElementById('theme-label').innerText = dark ? 'الوضع النهاري' : 'الوضع الليلي';
+            document.getElementById('theme-icon').innerHTML = dark
+                ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.900 4.900l1.400 1.400M17.700 17.700l1.400 1.400M2 12h2M20 12h2M4.900 19.100l1.400-1.400M17.700 6.300l1.400-1.400"/>'
+                : '<path d="M21 12.800A9 9 0 1111.200 3a7 7 0 009.800 9.800z"/>';
+        }
+
+        window.toggleDarkMode = function() {
+            const dark = !document.body.classList.contains('dark');
+            applyTheme(dark);
+            try { localStorage.setItem('hotel-theme', dark ? 'dark' : 'light'); } catch (e) {}
+        }
+
+        try { applyTheme(localStorage.getItem('hotel-theme') === 'dark'); } catch (e) { applyTheme(false); }
+
+        window.openAdminLogin = function() {
+            document.getElementById('admin-login-modal').classList.remove('hidden');
+        }
+
+        window.closeAdminLogin = function() {
+            document.getElementById('admin-login-modal').classList.add('hidden');
+            document.getElementById('admin-pass').value = '';
+        }
+
+        window.verifyAdmin = function() {
+            const pass = document.getElementById('admin-pass').value;
+            if(pass === '2017' || pass === '2018') {
+                closeAdminLogin();
+                isAdminLogged = true;
+                try { localStorage.setItem('hotel-admin-device', '1'); } catch (e) {}
+                renderReviews();
+                showAdminTab('bookings');
+                startRecordsFeed();
+                document.getElementById('admin-dashboard').classList.remove('hidden');
+                window.scrollTo({ top: document.getElementById('admin-dashboard').offsetTop, behavior: 'smooth' });
+            } else {
+                alert('رمز الأمان غير صحيح!');
+            }
+        }
+
+        window.logoutAdmin = function() {
+            isAdminLogged = false;
+            stopRecordsFeed();
+            renderReviews();
+            document.getElementById('admin-dashboard').classList.add('hidden');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // ===== تبويبات لوحة المدير + صفحة سجل الحجوزات =====
+        window.showAdminTab = function(tab) {
+            const on = 'admin-tab bg-amber-500 text-slate-950 font-bold px-5 py-2.5 rounded-xl text-sm transition shadow';
+            const off = 'admin-tab bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-5 py-2.5 rounded-xl text-sm transition';
+            ['bookings', 'customers', 'records'].forEach(t => {
+                document.getElementById('admin-tab-' + t).classList.toggle('hidden', t !== tab);
+                document.getElementById('tab-btn-' + t).className = t === tab ? on : off;
+            });
+        }
+
+        let globalRecords = [];
+        let recordsUnsub = null;
+        let recordsLimit = 100;
+
+        // لا تُحمَّل السجلات إلا بعد دخول المدير، وتتوقف عند تسجيل الخروج
+        let globalVisits = [];
+        let visitsUnsub = null;
+        function startRecordsFeed() {
+            if (!visitsUnsub) {
+                visitsUnsub = onSnapshot(collection(db, "visits"), (snapshot) => {
+                    globalVisits = [];
+                    snapshot.forEach(d => globalVisits.push({ id: d.id, ...d.data() }));
+                    renderCustomers();
+                }, (e) => console.error('visits', e));
+            }
+            if (recordsUnsub) return;
+            recordsUnsub = onSnapshot(collection(db, "records"), (snapshot) => {
+                globalRecords = [];
+                snapshot.forEach(d => globalRecords.push({ id: d.id, ...d.data() }));
+                renderRecords();
+                renderCustomers();
+            }, (error) => {
+                console.error("خطأ في تحميل السجلات:", error);
+                document.getElementById('records-table-body').innerHTML =
+                    '<tr><td colspan="10" class="text-center py-6 text-red-500">تعذر تحميل سجل الحجوزات.</td></tr>';
+            });
+        }
+        function stopRecordsFeed() {
+            if (recordsUnsub) { recordsUnsub(); recordsUnsub = null; }
+            if (visitsUnsub) { visitsUnsub(); visitsUnsub = null; }
+            globalRecords = [];
+            globalVisits = [];
+            const tb = document.getElementById('records-table-body');
+            if (tb) tb.innerHTML = '';
+            ['vip-table-body', 'customers-table-body'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = ''; });
+        }
+
+        // ===== تقرير العملاء =====
+        // يُبنى من سجل الحجوزات الدائم، فلا يتأثر بحذف الحجز من لوحة المدير، ولا يتكرر العميل.
+        const VIP_MIN_BOOKINGS = 3; // «أكثر من مرتين» = 3 حجوزات فأكثر
+        function customerKey(name, phone) {
+            const p = normPhone(phone);
+            return p.length >= 7 ? 'p' + p : 'n' + normText(name);
+        }
+        function buildCustomers() {
+            // 1) آخر حالة لكل حجز (السجلات مرتبة من الأقدم للأحدث)
+            const bookings = new Map();
+            globalRecords.forEach(r => {
+                const b = bookings.get(r.bookingId) || {
+                    key: customerKey(r.clientName, r.clientPhone),
+                    label: r.kind === 'عرض' ? '🎁 ' + (r.offerTitle || 'عرض') : (r.roomName || 'غرفة'),
+                    time: r.bookedAt || r.eventAt || ''
+                };
+                b.name = r.clientName; b.phone = r.clientPhone; b.decision = r.decision;
+                bookings.set(r.bookingId, b);
+            });
+            // 2) تجميع الحجوزات لكل عميل
+            const map = new Map();
+            bookings.forEach(b => {
+                let c = map.get(b.key);
+                if (!c) { c = { key: b.key, name: '', phone: '', count: 0, confirmed: 0, first: b.time, last: '', items: {} }; map.set(b.key, c); }
+                c.name = b.name || c.name; c.phone = b.phone || c.phone;
+                c.count++;
+                if (b.decision === 'مقبول') c.confirmed++;
+                if (b.time && (!c.first || b.time < c.first)) c.first = b.time;
+                if (b.time > c.last) c.last = b.time;
+                c.items[b.label] = (c.items[b.label] || 0) + 1;
+            });
+            // ترتيب تصاعدي حسب عدد مرات الحجز
+            return [...map.values()].sort((a, b) => a.count - b.count || String(a.first).localeCompare(String(b.first)));
+        }
+        function custItemsHTML(items) {
+            return Object.entries(items).map(([k, n]) => escapeHTML(k) + (n > 1 ? ` <span class="text-slate-500">×${n}</span>` : '')).join('<br>');
+        }
+        function renderCustomers() {
+            const tbody = document.getElementById('customers-table-body');
+            if (!tbody) return;
+            const all = buildCustomers();
+            const vips = all.filter(c => c.count >= VIP_MIN_BOOKINGS);
+
+            // إحصائيات الزوار
+            const today = new Date().toDateString();
+            const visitors = new Set(globalVisits.map(v => v.visitorId));
+            const todayVisits = globalVisits.filter(v => new Date(v.at).toDateString() === today);
+            const todayVisitors = new Set(todayVisits.map(v => v.visitorId));
+            document.getElementById('cs-visitors').innerText = visitors.size;
+            document.getElementById('cs-visitors-today').innerText = 'اليوم: ' + todayVisitors.size;
+            document.getElementById('cs-visits').innerText = globalVisits.length;
+            document.getElementById('cs-visits-today').innerText = 'اليوم: ' + todayVisits.length;
+            document.getElementById('cs-customers').innerText = all.length;
+            document.getElementById('cs-conv').innerText = visitors.size ? 'نسبة الحجز من الزوار: ' + Math.min(100, Math.round(all.length / visitors.size * 100)) + '%' : '';
+            document.getElementById('cs-vip').innerText = vips.length;
+
+            // البحث
+            const term = normText(document.getElementById('cust-search').value);
+            const digits = normPhone(document.getElementById('cust-search').value);
+            const match = (c) => !term || normText(c.name).includes(term) || (digits.length >= 3 && normPhone(c.phone).includes(digits));
+            const row = (c, i, withClass) => {
+                const vip = c.count >= VIP_MIN_BOOKINGS;
+                return `<tr>
+                    <td class="p-2.5 text-slate-500">${i + 1}</td>
+                    <td class="p-2.5 font-bold text-slate-900 rec-name">${vip ? '⭐ ' : ''}${escapeHTML(c.name)}</td>
+                    <td class="p-2.5 text-slate-700" dir="ltr" style="text-align:right">${escapeHTML(c.phone)}</td>
+                    <td class="p-2.5"><span class="cnt-badge${vip ? ' vip' : ''}">${c.count}</span></td>
+                    <td class="p-2.5 text-emerald-700 font-bold">${c.confirmed}</td>
+                    <td class="p-2.5 rec-wrap text-xs text-slate-600">${custItemsHTML(c.items)}</td>
+                    <td class="p-2.5 text-xs text-slate-600"><span dir="ltr">${escapeHTML(fmtDateTime(c.last))}</span></td>
+                    ${withClass ? `<td class="p-2.5">${vip ? '<span class="vip-badge">⭐ عميل مميز</span>' : '<span class="text-slate-500 text-xs">عميل</span>'}</td>` : ''}
+                </tr>`;
+            };
+            const vShown = vips.filter(match), aShown = all.filter(match);
+            document.getElementById('vip-table-body').innerHTML = vShown.length
+                ? vShown.map((c, i) => row(c, i, false)).join('')
+                : `<tr><td colspan="7" class="text-center py-6 text-slate-400">${vips.length ? 'لا توجد نتائج مطابقة.' : 'لا يوجد عملاء مميزون بعد. يظهر هنا من يحجز أكثر من مرتين.'}</td></tr>`;
+            tbody.innerHTML = aShown.length
+                ? aShown.map((c, i) => row(c, i, true)).join('')
+                : `<tr><td colspan="8" class="text-center py-6 text-slate-400">${all.length ? 'لا توجد نتائج مطابقة.' : 'لا يوجد عملاء بعد. يُحفظ اسم كل شخص يقوم بالحجز هنا تلقائيًا.'}</td></tr>`;
+            document.getElementById('cust-footer').innerText = `عدد العملاء: ${all.length} — المميزون: ${vips.length}`;
+        }
+
+        window.onRecFilter = function() { recordsLimit = 100; renderRecords(); }
+        window.recShowMore = function() { recordsLimit += 100; renderRecords(); }
+
+        function recDecisionBadge(d) {
+            if (d === 'مقبول') return '<span class="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full text-xs font-bold">مقبول ✔</span>';
+            if (d === 'مرفوض') return '<span class="bg-red-100 text-red-800 px-2.5 py-1 rounded-full text-xs font-bold">مرفوض ✖</span>';
+            return '<span class="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full text-xs font-bold">طلب جديد</span>';
+        }
+        function fmtDateTime(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            if (isNaN(d)) return String(iso);
+            const p = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+        }
+
+        function renderRecords() {
+            const tbody = document.getElementById('records-table-body');
+            if (!tbody) return;
+
+            // الإحصائيات: آخر قرار لكل حجز
+            const latest = new Map();
+            globalRecords.forEach((r, idx) => { r._seq = idx + 1; latest.set(r.bookingId, r.decision); });
+            let accepted = 0, rejected = 0, pending = 0;
+            latest.forEach(d => { if (d === 'مقبول') accepted++; else if (d === 'مرفوض') rejected++; else pending++; });
+            document.getElementById('rec-stat-total').innerText = latest.size;
+            document.getElementById('rec-stat-accepted').innerText = accepted;
+            document.getElementById('rec-stat-rejected').innerText = rejected;
+            document.getElementById('rec-stat-pending').innerText = pending;
+
+            // التصفية والبحث
+            const decision = document.getElementById('rec-filter').value;
+            const term = normText(document.getElementById('rec-search').value);
+            const digits = normPhone(document.getElementById('rec-search').value);
+            const rows = globalRecords.filter(r => {
+                if (decision && r.decision !== decision) return false;
+                if (!term) return true;
+                const hay = normText([r.clientName, r.roomName, r.roomNumber, r.offerTitle].join(' '));
+                return hay.includes(term) || (digits.length >= 3 && normPhone(r.clientPhone).includes(digits));
+            }).reverse(); // الأحدث أولاً
+
+            const total = globalRecords.length;
+            if (rows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" class="text-center py-6 text-slate-400">${total ? 'لا توجد سجلات مطابقة للبحث.' : 'لا توجد سجلات بعد. ستظهر هنا تلقائيًا مع أول حجز.'}</td></tr>`;
+                document.getElementById('rec-footer').innerHTML = '';
+                return;
+            }
+
+            const shown = rows.slice(0, recordsLimit);
+            tbody.innerHTML = shown.map((r) => {
+                const isOffer = r.kind === 'عرض';
+                const num = typeof r.id === 'number' ? r.id : r._seq; // رقم السجل (ترتيبه من الأقدم إلى الأحدث)
+                const migrated = r.source === 'مُرحَّل'
+                    ? `<div class="text-[10px] text-slate-500" title="حجز قديم نُقل إلى السجل عند تفعيله؛ الوقت المعروض هو وقت إرسال الحجز وليس بالضرورة وقت القرار">(مُرحَّل)</div>` : '';
+                const bookedLine = (r.source !== 'مُرحَّل' && r.bookedAt && fmtDateTime(r.bookedAt) !== fmtDateTime(r.eventAt))
+                    ? `<div class="text-[10px] text-slate-500">طُلب في <span dir="ltr">${escapeHTML(fmtDateTime(r.bookedAt))}</span></div>` : '';
+                const target = isOffer
+                    ? `<div class="text-xs text-amber-700 font-bold">🎁 حجز عرض</div>
+                       <div class="font-semibold text-slate-700">${escapeHTML(r.offerTitle)}</div>
+                       <div class="text-xs text-slate-500">${escapeHTML(r.residency)}${r.priceApplied ? ' — ' + escapeHTML(r.priceApplied) : ''}${r.roomName ? ' — ' + escapeHTML(r.roomName) : ''}</div>`
+                    : `<div class="text-xs text-slate-500">🛏️ حجز غرفة</div>
+                       <div class="font-semibold text-slate-700">${escapeHTML(r.roomName)}</div>
+                       ${r.roomNumber ? `<div class="text-xs text-slate-500">رقم الغرفة: ${escapeHTML(r.roomNumber)}</div>` : ''}`;
+                const stay = (r.checkIn || r.checkOut)
+                    ? `<div>الوصول: <span dir="ltr">${escapeHTML(r.checkIn) || '—'}</span></div><div>المغادرة: <span dir="ltr">${escapeHTML(r.checkOut) || '—'}</span></div>`
+                    : '<span class="text-slate-400">—</span>';
+                const pay = r.paymentMethod
+                    ? `<div>${r.paymentMethod === 'تطبيق بنكي' ? '🏦' : '💵'} ${escapeHTML(r.paymentMethod)}</div>
+                       ${r.bankName ? `<div class="text-xs text-slate-500">${escapeHTML(r.bankName)}</div>` : ''}
+                       ${r.paid ? `<div class="text-xs ${r.paid === 'نعم' ? 'text-emerald-600' : 'text-red-600'} font-bold">${r.paid === 'نعم' ? 'تم تأكيد الدفع ✔' : 'الدفع غير مؤكد'}</div>` : ''}`
+                    : '<span class="text-slate-400">—</span>';
+                const transport = (r.transport && r.transport !== 'بدون')
+                    ? `<div>${r.transport === 'ليموزين (المطار)' ? '🚘' : '🚕'} ${escapeHTML(r.transport)}</div>
+                       ${r.transportTime ? `<div class="text-xs text-slate-500" dir="ltr">${escapeHTML(r.transportTime.replace('T', ' '))}</div>` : ''}
+                       ${r.transportRef ? `<div class="text-xs text-slate-500">${escapeHTML(r.transportRef)}</div>` : ''}`
+                    : '<span class="text-slate-400">—</span>';
+                return `
+                    <tr>
+                        <td class="p-2.5 text-slate-500">${escapeHTML(num)}</td>
+                        <td class="p-2.5">${recDecisionBadge(r.decision)}</td>
+                        <td class="p-2.5 text-xs text-slate-600"><div dir="ltr" class="text-right">${escapeHTML(fmtDateTime(r.eventAt))}</div>${bookedLine}${migrated}</td>
+                        <td class="p-2.5 font-bold text-slate-900 rec-name">${escapeHTML(r.clientName)}</td>
+                        <td class="p-2.5 text-slate-700" dir="ltr" style="text-align:right">${escapeHTML(r.clientPhone)}</td>
+                        <td class="p-2.5 rec-wrap">${target}</td>
+                        <td class="p-2.5 text-xs text-slate-600">${stay}</td>
+                        <td class="p-2.5 rec-wrap">${pay}</td>
+                        <td class="p-2.5 rec-wrap">${transport}</td>
+                        <td class="p-2.5 rec-notes text-slate-600">${escapeHTML(r.notes) || '<span class="text-slate-400">—</span>'}</td>
+                    </tr>`;
+            }).join('');
+
+            document.getElementById('rec-footer').innerHTML =
+                `عرض ${shown.length} من ${rows.length} سجل` + (rows.length !== total ? ` (إجمالي السجلات ${total})` : '') +
+                (rows.length > shown.length ? ` <button onclick="recShowMore()" style="margin-right:.5rem" class="bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white font-bold px-4 py-2 rounded-xl text-xs transition">عرض المزيد</button>` : '');
+        }
+
+        function checkRoomAvailabilityAndUI(bookingsList) {
+            const rooms = ROOMS.map(r => ({ name: r.name, btnId: 'btn-room-' + r.id, statusId: 'status-room-' + r.id }));
+
+            const today = new Date().toISOString().split('T')[0];
+
+            rooms.forEach(room => {
+                const statusEl = document.getElementById(room.statusId);
+                const btnEl = document.getElementById(room.btnId);
+
+                const activeBookings = bookingsList.filter(b => b.roomName === room.name && b.status === 'مؤكد' && b.checkOutDate >= today);
+                
+                if (activeBookings.length > 0) {
+                    activeBookings.sort((a, b) => new Date(a.checkInDate) - new Date(b.checkInDate));
+                    const nextBooking = activeBookings[0];
+
+                    const checkInDateObj = new Date(nextBooking.checkInDate);
+                    const todayObj = new Date(today);
+                    const diffDays = Math.ceil((checkInDateObj - todayObj) / (1000 * 60 * 60 * 24));
+
+                    if (diffDays <= 0) {
+                        statusEl.className = "mb-4 text-xs font-bold p-2.5 rounded-xl bg-red-100 text-red-700 text-center";
+                        statusEl.innerText = `🔴 الغرفة ممتلئة حتى يوم ${nextBooking.checkOutDate}`;
+                        btnEl.disabled = true;
+                        btnEl.className = "w-full bg-slate-300 text-slate-500 font-bold py-2.5 rounded-xl cursor-not-allowed";
+                    } else if (diffDays <= 5) {
+                        statusEl.className = "mb-4 text-xs font-bold p-2.5 rounded-xl bg-amber-100 text-amber-800 text-center";
+                        statusEl.innerText = `⚠️ الغرفة ممتلئة ابتداءً من تاريخ ${nextBooking.checkInDate}`;
+                        btnEl.disabled = false;
+                        btnEl.className = "w-full bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white font-bold py-2.5 rounded-xl transition";
+                    } else {
+                        statusEl.className = "mb-4 text-xs font-bold p-2.5 rounded-xl bg-emerald-100 text-emerald-800 text-center";
+                        statusEl.innerText = `🟢 الغرفة متاحة (ممتلئة ابتداءً من يوم ${nextBooking.checkInDate})`;
+                        btnEl.disabled = false;
+                        btnEl.className = "w-full bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white font-bold py-2.5 rounded-xl transition";
+                    }
+                } else {
+                    statusEl.className = "mb-4 text-xs font-bold p-2.5 rounded-xl bg-emerald-100 text-emerald-800 text-center";
+                    statusEl.innerText = `🟢 متاح للحجز الفوري`;
+                    btnEl.disabled = false;
+                    btnEl.className = "w-full bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white font-bold py-2.5 rounded-xl transition";
+                }
+            });
+        }
+
+        window.submitBooking = async function(e) {
+            e.preventDefault();
+
+            const name = document.getElementById('client-name').value;
+            const phone = document.getElementById('client-phone').value;
+            const checkIn = document.getElementById('check-in').value;
+            const checkOut = document.getElementById('check-out').value;
+            const notes = document.getElementById('client-notes').value;
+
+            const payMethod = document.querySelector('input[name="pay-method"]:checked')?.value;
+            const bankName = document.querySelector('input[name="bank-name"]:checked')?.value || '';
+            const transport = document.querySelector('input[name="transport"]:checked')?.value || 'none';
+            const transportTime = document.getElementById('transport-time').value;
+            const transportRef = document.getElementById('transport-ref').value.trim();
+            if (transport !== 'none' && !transportTime) { alert('يرجى تحديد موعد وصول ' + (transport === 'limousine' ? 'الطائرة' : 'الباص') + ' ليتم إرسال ' + (transport === 'limousine' ? 'الليموزين' : 'التاكسي') + ' في الوقت المناسب.'); return; }
+            if (!payMethod) { alert('يرجى اختيار طريقة الدفع.'); return; }
+            if (payMethod === 'bank' && !bankName) { alert('يرجى اختيار أحد البنوك / التطبيقات البنكية.'); return; }
+
+            if (checkIn >= checkOut) {
+                alert('خطأ في التواريخ: تاريخ المغادرة يجب أن يكون بعد تاريخ الوصول.');
+                return;
+            }
+
+            const conflicting = globalBookings.find(b => {
+                if (b.roomName !== selectedRoomName || b.status !== 'مؤكد') return false;
+                return (checkIn < b.checkOutDate) && (checkOut > b.checkInDate);
+            });
+
+            if (conflicting) {
+                alert(`عذراً، التواريخ متعارضة مع حجز مسبق من (${conflicting.checkInDate} إلى ${conflicting.checkOutDate}).`);
+                return;
+            }
+
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.innerText = 'جاري الإرسال...';
+            submitBtn.disabled = true;
+
+            try {
+                await addDoc(collection(db, "booking"), {
+                    clientName: name,
+                    clientPhone: phone,
+                    roomName: selectedRoomName,
+                    checkInDate: checkIn,
+                    checkOutDate: checkOut,
+                    notes: notes,
+                    status: "قيد الانتظار",
+                    paymentMethod: payMethod,
+                    bankName: payMethod === 'bank' ? bankName : '',
+                    paid: false,
+                    transport: transport,
+                    transportTime: transport !== 'none' ? transportTime : '',
+                    transportRef: transport !== 'none' ? transportRef : '',
+                    kind: 'room',
+                    createdAt: new Date().toISOString()
+                });
+
+                if (payMethod === 'bank') {
+                    alert('تم تسجيل الحجز.\nحوّل المبلغ إلى الحساب رقم: 2560786\nاسم الحساب: حسابي (حساب وهمي للتجربة)\nلن يتم تأكيد الحجز إلا بعد وصول المبلغ.');
+                } else {
+                    alert('تم إرسال طلب الحجز بنجاح!');
+                }
+                closeBookingModal();
+            } catch (error) {
+                console.error("خطأ في حفظ الحجز: ", error);
+                alert('حدث خطأ أثناء حفظ الحجز، تحقق من اتصالك بالإنترنت.');
+            } finally {
+                submitBtn.innerText = 'إرسال الحجز';
+                submitBtn.disabled = false;
+            }
+        }
+
+        onSnapshot(collection(db, "booking"), (snapshot) => {
+            const tbody = document.getElementById('bookings-table-body');
+            tbody.innerHTML = '';
+            globalBookings = [];
+            
+            let total = 0, pending = 0, confirmed = 0;
+            
+            if(snapshot.empty) {
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-slate-400">لا توجد حجوزات مسجلة حالياً.</td></tr>`;
+            }
+
+            snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                const id = docSnap.id;
+                globalBookings.push({ id, ...data });
+                
+                total++;
+                if(data.status === 'قيد الانتظار') pending++;
+                if(data.status === 'مؤكد') confirmed++;
+
+                let statusBadge = '';
+                if(data.status === 'مؤكد') statusBadge = '<span class="bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full text-xs font-bold">مؤكد</span>';
+                else if(data.status === 'مرفوض') statusBadge = '<span class="bg-red-100 text-red-800 px-2.5 py-1 rounded-full text-xs font-bold">مرفوض</span>';
+                else statusBadge = '<span class="bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full text-xs font-bold">قيد الانتظار</span>';
+
+                const needsPay = data.paymentMethod === 'bank' && !data.paid;
+                const payLabel = data.paymentMethod === 'bank'
+                    ? `🏦 ${escapeHTML(data.bankName || 'تطبيق بنكي')} ` + (data.paid ? '<span class="text-emerald-600 font-bold">(تم الدفع ✔)</span>' : '<span class="text-red-600 font-bold">(لم يُؤكَّد الدفع)</span>')
+                    : (data.paymentMethod === 'cash' ? '💵 الدفع عند الوصول' : '');
+                const trLabel = data.transport === 'limousine' ? '🚘 ليموزين (المطار)' : data.transport === 'taxi' ? '🚕 تاكسي (الميناء البري)' : '';
+                const warnIcon = needsPay ? '<span title="لم يتم تأكيد الدفع المسبق - لا تقبل الحجز قبل التأكد" class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white text-sm font-black ml-1">!</span>' : '';
+                const row = `
+                    <tr class="hover:bg-slate-50 transition">
+                        <td class="p-3">
+                            <div class="font-bold text-slate-900">${warnIcon}${escapeHTML(data.clientName || '')}</div>
+                            <div class="text-xs text-slate-500" dir="ltr">${escapeHTML(data.clientPhone || '')}</div>
+                            <div class="text-xs mt-1">${payLabel}</div>
+                            ${trLabel ? `<div class="text-xs">${trLabel}${data.transportTime ? ' — ' + escapeHTML(data.transportTime.replace('T',' ')) : ''}${data.transportRef ? ' (' + escapeHTML(data.transportRef) + ')' : ''}</div>` : ''}
+                            ${data.offerTitle ? `<div class="text-xs text-amber-700">🎁 ${escapeHTML(data.offerTitle)}</div>` : ''}
+                        </td>
+                        <td class="p-3 font-semibold text-slate-700">${data.kind === 'offer' ? `🎁 عرض<div class="text-xs font-normal">${data.isResident ? 'مقيم' : 'من خارج الفندق'} — ${escapeHTML(data.priceApplied || '')}</div>` : ''}${escapeHTML(data.roomName || '')}${data.kind !== 'offer' ? `<div class="mt-1 flex gap-1"><input id="rn-${id}" value="${escapeHTML(data.roomNumber || '')}" placeholder="رقم الغرفة" class="w-20 border border-slate-300 rounded px-1 py-0.5 text-xs font-normal"><button onclick="saveRoomNumber('${id}')" class="bg-slate-700 text-white px-2 rounded text-xs">حفظ</button></div>` : ''}</td>
+                        <td class="p-3 text-xs text-slate-600">
+                            ${data.kind === 'offer' ? `<div>${escapeHTML(data.offerTitle || '')}</div>` : `<div>الوصول: ${data.checkInDate || ''}</div><div>المغادرة: ${data.checkOutDate || ''}</div>`}
+                        </td>
+                        <td class="p-3">${statusBadge}</td>
+                        <td class="p-3 text-center space-x-1 space-x-reverse">
+                            ${needsPay ? `<button onclick="markPaid('${id}')" class="bg-sky-600 hover:bg-sky-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold transition">تأكيد الدفع</button>` : ''}
+                            <button onclick="updateStatus('${id}', 'مؤكد')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold transition">قبول</button>
+                            <button onclick="updateStatus('${id}', 'مرفوض')" class="bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold transition">رفض</button>
+                            <button onclick="deleteBooking('${id}')" class="bg-red-600 hover:bg-red-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold transition">حذف</button>
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+
+            document.getElementById('stat-total').innerText = total;
+            document.getElementById('stat-pending').innerText = pending;
+            document.getElementById('stat-confirmed').innerText = confirmed;
+
+            checkRoomAvailabilityAndUI(globalBookings);
+            updateRoomStats();
+        });
+
+        function normalizeWhatsAppNumber(raw) {
+            let n = String(raw || '').replace(/[^\d]/g, '');
+            if (n.startsWith('00')) n = n.slice(2);
+            else if (n.startsWith('0')) n = '249' + n.slice(1); // رقم سوداني محلي
+            return n;
+        }
+
+        window.updateStatus = async function(id, newStatus) {
+            const booking = globalBookings.find(b => b.id === id);
+
+            // فتح الواتساب مباشرة عند الضغط (قبل أي عملية انتظار) حتى لا يحظره المتصفح
+            if (newStatus === 'مؤكد' && booking) {
+                const msg = booking.kind === 'offer'
+                    ? `السلام عليكم ${booking.clientName}،\nيسعدنا إبلاغكم بتأكيد حجزكم في العرض: ${booking.offerTitle} ✅\n💰 السعر: ${booking.priceApplied}\n\nنتشرف بخدمتكم.`
+                    : `السلام عليكم ${booking.clientName}،\n` +
+                    `يسعدنا إبلاغكم بتأكيد حجزكم في فندق المدينة - بورتسودان ✅\n\n` +
+                    `🛏️ الغرفة: ${booking.roomName}\n` +
+                    `📅 الوصول: ${booking.checkInDate}\n` +
+                    `📅 المغادرة: ${booking.checkOutDate}\n\n` +
+                    `نتشرف باستقبالكم.`;
+                const url = `https://api.whatsapp.com/send?phone=${normalizeWhatsAppNumber(booking.clientPhone)}&text=${encodeURIComponent(msg)}`;
+                const w = window.open(url, '_blank');
+                if (!w) window.location.href = url; // إذا حُظرت النافذة ننتقل في نفس الصفحة
+            }
+
+            try {
+                await updateDoc(doc(db, "booking", id), { status: newStatus });
+            } catch (error) {
+                console.error("خطأ في التحديث:", error);
+                alert('تعذر تحديث حالة الحجز.');
+            }
+        }
+
+        window.saveRoomNumber = async function(id) {
+            const v = document.getElementById('rn-' + id).value.trim();
+            try { await updateDoc(doc(db, "booking", id), { roomNumber: v }); }
+            catch (e) { console.error(e); alert('تعذر حفظ رقم الغرفة.'); }
+        }
+
+        window.markPaid = async function(id) {
+            try { await updateDoc(doc(db, "booking", id), { paid: true }); }
+            catch (e) { console.error(e); alert('تعذر تحديث حالة الدفع.'); }
+        }
+
+        // ===== العروض =====
+        let globalOffers = [];
+        function renderOffers() {
+            const sec = document.getElementById('offers');
+            const grid = document.getElementById('offers-grid');
+            const today = new Date().toISOString().split('T')[0];
+            const active = globalOffers.filter(o => !o.until || o.until >= today);
+            if (active.length === 0) {
+                grid.innerHTML = '<p class="text-center text-slate-400 md:col-span-3">لا توجد عروض حالياً، ترقبوا عروضنا القادمة 🎁</p>';
+            } else grid.innerHTML = active.map(o => `
+                <div class="bg-white rounded-2xl shadow-md overflow-hidden border border-slate-100 flex flex-col">
+                    ${o.image ? `<img src="${o.image}" alt="" class="h-48 w-full object-cover">` : `<div class="h-48 w-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-6xl">🎁</div>`}
+                    <div class="p-5 flex-1 flex flex-col justify-between">
+                        <div>
+                            <span class="text-xs bg-amber-100 text-amber-800 font-bold px-2 py-1 rounded-full">${escapeHTML(o.type)}</span>
+                            <h3 class="font-bold text-xl text-slate-900 mt-2">${escapeHTML(o.title)}</h3>
+                            <p class="text-slate-600 text-sm my-2 whitespace-pre-line">${escapeHTML(o.description)}</p>
+                            ${o.oldPrice
+                                ? `<div class="text-sm space-y-1 mb-1">
+                                     <div>✅ للمقيمين في الفندق: <span class="text-emerald-600 font-black text-lg">${escapeHTML(o.price)}</span></div>
+                                     <div class="text-slate-500">👤 لغير المقيمين: <span class="font-bold">${escapeHTML(o.oldPrice)}</span></div>
+                                   </div>`
+                                : `<div class="mb-1"><span class="text-amber-600 font-black text-lg">${escapeHTML(o.price)}</span></div>`}
+                            ${o.until ? `<p class="text-xs text-red-500 font-bold">ينتهي العرض: ${escapeHTML(o.until)}</p>` : ''}
+                        </div>
+                        <button onclick="bookOffer('${o.id}')" class="mt-4 w-full bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white font-bold py-2.5 rounded-xl transition">احجز هذا العرض</button>
+                    </div>
+                </div>`).join('');
+            const list = document.getElementById('admin-offers-list');
+            if (list) list.innerHTML = globalOffers.length ? globalOffers.map(o => `
+                <div class="flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm">
+                    <span><b>${escapeHTML(o.title)}</b> <span class="text-slate-500">— ${escapeHTML(o.type)} — ${escapeHTML(o.price)}</span></span>
+                    <button onclick="deleteOffer('${o.id}')" class="bg-red-600 hover:bg-red-700 text-white px-2.5 py-1 rounded-lg text-xs font-bold">حذف</button>
+                </div>`).join('') : '<p class="text-slate-400 text-sm">لا توجد عروض منشورة.</p>';
+        }
+
+        onSnapshot(collection(db, "offers"), (snap) => {
+            globalOffers = [];
+            snap.forEach(d => globalOffers.push({ id: d.id, ...d.data() }));
+            globalOffers.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+            renderOffers();
+        }, (err) => {
+            console.error('offers', err);
+            document.getElementById('offers-grid').innerHTML = '<p class="text-center text-red-500 md:col-span-3">تعذر تحميل العروض: ' + escapeHTML(err.code || err.message) + '</p>';
+        });
+
+        function resizeImage(file, maxW = 700) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const url = URL.createObjectURL(file);
+                img.onload = () => {
+                    const scale = Math.min(1, maxW / img.width);
+                    const c = document.createElement('canvas');
+                    c.width = img.width * scale; c.height = img.height * scale;
+                    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                    URL.revokeObjectURL(url);
+                    resolve(c.toDataURL('image/jpeg', 0.7));
+                };
+                img.onerror = reject;
+                img.src = url;
+            });
+        }
+
+        window.addOffer = async function() {
+            const title = document.getElementById('offer-title').value.trim();
+            const price = document.getElementById('offer-price').value.trim();
+            if (!title || !price) { alert('يرجى كتابة عنوان العرض والسعر.'); return; }
+            const btn = document.getElementById('offer-add-btn');
+            btn.disabled = true; btn.innerText = 'جاري النشر...';
+            try {
+                const f = document.getElementById('offer-image').files[0];
+                const image = f ? await resizeImage(f) : '';
+                await addDoc(collection(db, "offers"), {
+                    title, price,
+                    type: document.getElementById('offer-type').value,
+                    oldPrice: document.getElementById('offer-old-price').value.trim(),
+                    until: document.getElementById('offer-until').value,
+                    description: document.getElementById('offer-desc').value.trim(),
+                    image,
+                    createdAt: new Date().toISOString()
+                });
+                ['offer-title','offer-price','offer-old-price','offer-until','offer-desc','offer-image'].forEach(i => document.getElementById(i).value = '');
+            } catch (e) {
+                console.error(e);
+                alert('تعذر نشر العرض (قد تكون الصورة كبيرة والتخزين ممتلئاً).');
+            } finally { btn.disabled = false; btn.innerText = 'نشر العرض'; }
+        }
+
+        window.deleteOffer = async function(id) {
+            if (confirm('حذف هذا العرض؟')) {
+                try { await deleteDoc(doc(db, "offers", id)); } catch (e) { console.error(e); }
+            }
+        }
+
+        window.deleteBooking = async function(id) {
+            if(confirm('هل أنت متأكد من حذف الحجز؟\n(سيبقى سجله محفوظًا في سجل الحجوزات)')) {
+                try {
+                    await deleteDoc(doc(db, "booking", id));
+                } catch (error) {
+                    console.error("خطأ في الحذف:", error);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
